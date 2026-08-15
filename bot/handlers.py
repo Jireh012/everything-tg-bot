@@ -21,7 +21,14 @@ from telegram.ext import ContextTypes
 
 from bot.config import Config
 from bot.downloader import DownloadError, Downloader, cleanup
-from bot.everything import EverythingClient, FileHit, SearchError, build_query, format_size
+from bot.everything import (
+    EverythingClient,
+    FileHit,
+    SearchError,
+    build_query,
+    format_hit_meta,
+    format_size,
+)
 from bot.formats import ALL_FORMATS, build_result_keyboard
 from bot.session import InlineHitStore, RateLimiter, SessionStore, UserSession
 
@@ -429,10 +436,9 @@ class BotApp:
         chunk = session.results[start : start + self.config.page_size]
         lines = [header, ""]
         for offset, hit in enumerate(chunk, start=start + 1):
-            ext = hit.ext.upper() if hit.ext else "?"
-            line = f"{offset}. {hit.name}  ({format_size(hit.size)} · {ext})"
-            if hit.path_tail:
-                line += f"\n    └ {hit.path_tail}"
+            line = f"{offset}. {hit.name}  ({format_hit_meta(hit)})"
+            if hit.display_path:
+                line += f"\n    └ {hit.display_path}"
             lines.append(line)
         lines.append("")
         lines.append("回复编号下载，例如：1")
@@ -442,16 +448,10 @@ class BotApp:
         self, hit: FileHit, bot_username: str | None, *, total: int
     ) -> InlineQueryResultArticle:
         token = self.inline_hits.put(hit)
-        ext = hit.ext.upper() if hit.ext else "?"
-        description = f"{format_size(hit.size)} · {ext}"
-        if hit.path_tail:
-            description += f" · {hit.path_tail}"
-        text = (
-            f"<b>{escape(hit.name)}</b>\n"
-            f"{escape(format_size(hit.size))} · {escape(ext)}"
-        )
-        if hit.path_tail:
-            text += f"\n└ {escape(hit.path_tail)}"
+        description = format_hit_meta(hit)
+        text = f"<b>{escape(hit.name)}</b>\n{escape(format_hit_meta(hit))}"
+        if hit.display_path:
+            text += f"\n└ {escape(hit.display_path)}"
         text += f"\n\n共 {total} 条，点下方按钮到私聊下载。"
         markup = None
         if bot_username:

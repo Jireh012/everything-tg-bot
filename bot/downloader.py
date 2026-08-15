@@ -9,7 +9,7 @@ from pathlib import Path
 
 import httpx
 
-from bot.everything import format_size
+from bot.everything import format_size, to_direct_download_url
 
 ProgressCallback = Callable[[int, int | None], Awaitable[None]]
 
@@ -47,6 +47,38 @@ class Downloader:
         async with self._sema:
             return await self._download(url, filename, expected_size, on_progress)
 
+    async def _stream_to_file(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        dest: Path,
+        expected_size: int,
+        on_progress: ProgressCallback | None,
+    ) -> int:
+        written = 0
+        last_report = 0.0
+        async with client.stream("GET", url) as resp:
+            if resp.status_code >= 400:
+                raise DownloadError(f"下载失败（HTTP {resp.status_code}）")
+            total = _content_length(resp) or (expected_size or None)
+            if total and total > self.max_file_size:
+                raise DownloadError(
+                    f"文件过大（{format_size(total)}），上限 {format_size(self.max_file_size)}"
+                )
+            with dest.open("wb") as fh:
+                async for chunk in resp.aiter_bytes(64 * 1024):
+                    written += len(chunk)
+                    if written > self.max_file_size:
+                        raise DownloadError(
+                            f"文件过大，上限 {format_size(self.max_file_size)}"
+                        )
+                    fh.write(chunk)
+                    now = asyncio.get_running_loop().time()
+                    if on_progress and now - last_report >= 2.0:
+                        last_report = now
+                        await on_progress(written, total)
+        return written
+
     async def _download(
         self,
         url: str,
@@ -62,35 +94,25 @@ class Downloader:
             )
         }
         timeout = httpx.Timeout(30.0, read=600.0)
-        written = 0
-        last_report = 0.0
 
         try:
             async with httpx.AsyncClient(
                 timeout=timeout, follow_redirects=True, headers=headers
             ) as client:
-                async with client.stream("GET", url) as resp:
-                    if resp.status_code >= 400:
-                        raise DownloadError(f"下载失败（HTTP {resp.status_code}）")
-                    total = _content_length(resp) or (expected_size or None)
-                    if total and total > self.max_file_size:
-                        raise DownloadError(
-                            f"文件过大（{format_size(total)}），上限 {format_size(self.max_file_size)}"
+                written = await self._stream_to_file(
+                    client, url, dest, expected_size, on_progress
+                )
+                if _file_looks_like_html(dest):
+                    alt = to_direct_download_url(url)
+                    if alt != url:
+                        _unlink_quiet(dest)
+                        written = await self._stream_to_file(
+                            client, alt, dest, expected_size, on_progress
                         )
-                    with dest.open("wb") as fh:
-                        async for chunk in resp.aiter_bytes(64 * 1024):
-                            written += len(chunk)
-                            if written > self.max_file_size:
-                                raise DownloadError(
-                                    f"文件过大，上限 {format_size(self.max_file_size)}"
-                                )
-                            fh.write(chunk)
-                            now = asyncio.get_running_loop().time()
-                            if on_progress and now - last_report >= 2.0:
-                                last_report = now
-                                await on_progress(written, total)
-            if written == 0:
-                raise DownloadError("下载内容为空")
+                if written == 0:
+                    raise DownloadError("下载内容为空")
+                if _file_looks_like_html(dest):
+                    raise DownloadError("下载到的是网页而不是文件，请稍后重试")
             if on_progress:
                 await on_progress(written, written)
             return dest
@@ -111,6 +133,24 @@ class Downloader:
 def cleanup(path: Path | None) -> None:
     if path is not None:
         _unlink_quiet(path)
+
+
+def _looks_like_html(content_type: str | None, sample: bytes) -> bool:
+    ctype = (content_type or "").lower()
+    if "text/html" in ctype:
+        return True
+    head = sample.lstrip()[:64].lower()
+    return head.startswith(b"<!doctype html") or head.startswith(b"<html")
+
+
+def _file_looks_like_html(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        sample = path.read_bytes()[:256]
+    except OSError:
+        return False
+    return _looks_like_html(None, sample)
 
 
 def _content_length(resp: httpx.Response) -> int | None:

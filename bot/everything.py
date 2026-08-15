@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
 from typing import Any
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, unquote, urljoin, urlparse, urlunsplit
 
 import httpx
+
+_TZ_CN = timezone(timedelta(hours=8))
+_FILETIME_UNIX_EPOCH = 11644473600
 
 # 用户原文里的扩展条件，点格式按钮时去掉后再追加 ext:
 _EXT_FILTER_RE = re.compile(
@@ -33,16 +37,44 @@ class FileHit:
 
     @property
     def path_tail(self) -> str:
-        return self.path.rstrip("/").split("/")[-1]
+        return self.display_path.rstrip("/").split("/")[-1]
+
+    @property
+    def display_path(self) -> str:
+        raw = (self.path or "").strip()
+        if not raw:
+            return ""
+        parsed = urlparse(raw)
+        if parsed.scheme and parsed.path:
+            return unquote(parsed.path)
+        return unquote(raw)
 
     @property
     def download_url(self) -> str:
-        base = self.path.rstrip("/") + "/"
-        return urljoin(base, quote(self.name))
+        parsed = urlparse(self.path)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            dir_path = unquote(parsed.path or "").rstrip("/")
+            file_path = f"{dir_path}/{self.name}" if dir_path else f"/{self.name}"
+            joined = urlunsplit((parsed.scheme, parsed.netloc, file_path, "", ""))
+            return to_direct_download_url(joined)
+        return urljoin(self.path.rstrip("/") + "/", quote(self.name))
 
     @property
     def is_file(self) -> bool:
         return self.item_type == "file"
+
+
+def to_direct_download_url(url: str) -> str:
+    """AList 浏览地址返回 HTML，直链在 /d/ 前缀。"""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return url
+    path = unquote(parsed.path or "")
+    if path.startswith("/d/") or path == "/d":
+        return url
+    if not path.startswith("/"):
+        path = "/" + path
+    return urlunsplit((parsed.scheme, parsed.netloc, "/d" + path, parsed.query, parsed.fragment))
 
 
 def strip_ext_filters(keyword: str) -> str:
@@ -59,6 +91,37 @@ def build_query(keyword: str, ext: str | None) -> str:
     if not base:
         return f"ext:{ext}"
     return f"{base} ext:{ext}"
+
+
+def format_mtime(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    try:
+        n = int(float(text))
+    except ValueError:
+        return text
+    if n <= 0:
+        return ""
+    if n >= 10**16:
+        unix = n / 10_000_000 - _FILETIME_UNIX_EPOCH
+    elif n >= 10**12:
+        unix = n / 1000
+    else:
+        unix = n
+    try:
+        return datetime.fromtimestamp(unix, tz=_TZ_CN).strftime("%Y-%m-%d %H:%M")
+    except (OSError, OverflowError, ValueError):
+        return text
+
+
+def format_hit_meta(hit: FileHit) -> str:
+    ext = hit.ext.upper() if hit.ext else "?"
+    parts = [format_size(hit.size), ext]
+    mtime = format_mtime(hit.date_modified)
+    if mtime:
+        parts.append(mtime)
+    return " · ".join(parts)
 
 
 def format_size(size: int) -> str:

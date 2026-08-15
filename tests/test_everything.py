@@ -1,4 +1,16 @@
-from bot.everything import FileHit, build_query, format_size, strip_ext_filters
+from datetime import datetime, timezone, timedelta
+
+from bot.everything import (
+    FileHit,
+    build_query,
+    format_hit_meta,
+    format_mtime,
+    format_size,
+    strip_ext_filters,
+    to_direct_download_url,
+)
+
+_TZ_CN = timezone(timedelta(hours=8))
 from bot.session import InlineHitStore
 
 
@@ -34,9 +46,41 @@ def test_download_url() -> None:
         date_modified="",
         item_type="file",
     )
-    assert hit.download_url.endswith("%E5%A4%9A%E5%85%83%E7%A4%BE%E4%BC%9A%E4%B8%AD%E7%9A%84%E5%9F%BA%E7%9D%A3%E6%95%99.pdf")
+    assert (
+        hit.download_url
+        == "http://www.https.ng/d/baidupan/txt/09_其他综合资源/新建文件夹_27e6/多元社会中的基督教.pdf"
+    )
     assert hit.ext == "pdf"
     assert hit.path_tail == "新建文件夹_27e6"
+    assert hit.display_path == "/baidupan/txt/09_其他综合资源/新建文件夹_27e6"
+
+
+def test_to_direct_download_url() -> None:
+    src = "http://www.https.ng/baidupan/txt/a.pdf"
+    assert to_direct_download_url(src) == "http://www.https.ng/d/baidupan/txt/a.pdf"
+    already = "http://www.https.ng/d/baidupan/txt/a.pdf"
+    assert to_direct_download_url(already) == already
+
+
+def test_format_mtime() -> None:
+    assert format_mtime("") == ""
+    assert format_mtime("2024-03-15 12:30:00") == "2024-03-15 12:30:00"
+    unix = int(datetime(2024, 3, 15, 12, 30, tzinfo=_TZ_CN).timestamp())
+    assert format_mtime(str(unix)) == "2024-03-15 12:30"
+    filetime = str(int((unix + 11644473600) * 10_000_000))
+    assert format_mtime(filetime) == "2024-03-15 12:30"
+
+
+def test_format_hit_meta() -> None:
+    unix = int(datetime(2024, 3, 15, 12, 30, tzinfo=_TZ_CN).timestamp())
+    hit = FileHit(
+        name="a.pdf",
+        path="http://example/dir/sub",
+        size=1621887,
+        date_modified=str(unix),
+        item_type="file",
+    )
+    assert format_hit_meta(hit) == "1.5 MB · PDF · 2024-03-15 12:30"
 
 
 def test_inline_hit_store() -> None:
@@ -64,5 +108,8 @@ if __name__ == "__main__":
     test_strip_ext_filters()
     test_format_size()
     test_download_url()
+    test_to_direct_download_url()
+    test_format_mtime()
+    test_format_hit_meta()
     test_inline_hit_store()
     print("ok")
