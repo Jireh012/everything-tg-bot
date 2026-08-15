@@ -86,7 +86,9 @@ class Downloader:
         expected_size: int,
         on_progress: ProgressCallback | None,
     ) -> Path:
-        dest = self.download_dir / f"{uuid.uuid4().hex}_{safe_filename(filename)}"
+        work_dir = self.download_dir / uuid.uuid4().hex
+        work_dir.mkdir(parents=True, exist_ok=True)
+        dest = work_dir / safe_filename(filename)
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -117,22 +119,32 @@ class Downloader:
                 await on_progress(written, written)
             return dest
         except httpx.TimeoutException as exc:
-            _unlink_quiet(dest)
+            cleanup(dest)
             raise DownloadError("下载超时") from exc
         except httpx.HTTPError as exc:
-            _unlink_quiet(dest)
+            cleanup(dest)
             raise DownloadError("下载连接失败") from exc
         except DownloadError:
-            _unlink_quiet(dest)
+            cleanup(dest)
             raise
         except OSError as exc:
-            _unlink_quiet(dest)
+            cleanup(dest)
             raise DownloadError("写入临时文件失败") from exc
 
 
+_UUID_DIR = re.compile(r"^[0-9a-f]{32}$")
+
+
 def cleanup(path: Path | None) -> None:
-    if path is not None:
-        _unlink_quiet(path)
+    if path is None:
+        return
+    parent = path.parent
+    _unlink_quiet(path)
+    if _UUID_DIR.fullmatch(parent.name):
+        try:
+            parent.rmdir()
+        except OSError:
+            pass
 
 
 def _looks_like_html(content_type: str | None, sample: bytes) -> bool:

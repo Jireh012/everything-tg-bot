@@ -11,6 +11,7 @@ from bot.everything import (
 )
 
 _TZ_CN = timezone(timedelta(hours=8))
+from bot.downloader import cleanup, safe_filename
 from bot.session import InlineHitStore
 
 
@@ -102,6 +103,25 @@ def test_inline_hit_store() -> None:
     assert expired.get(token) is None
 
 
+def test_safe_filename_keeps_original() -> None:
+    assert safe_filename("多元社会中的基督教.pdf") == "多元社会中的基督教.pdf"
+
+
+def test_cleanup_removes_uuid_dir() -> None:
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        work = root / ("a" * 32)
+        dest = work / "多元社会中的基督教.pdf"
+        work.mkdir()
+        dest.write_bytes(b"x")
+        cleanup(dest)
+        assert not dest.exists()
+        assert not work.exists()
+
+
 if __name__ == "__main__":
     test_passthrough()
     test_button_overrides_ext()
@@ -112,4 +132,6 @@ if __name__ == "__main__":
     test_format_mtime()
     test_format_hit_meta()
     test_inline_hit_store()
+    test_safe_filename_keeps_original()
+    test_cleanup_removes_uuid_dir()
     print("ok")
