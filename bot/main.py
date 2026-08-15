@@ -5,7 +5,14 @@ import time
 import urllib.error
 import urllib.request
 
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    InlineQueryHandler,
+    MessageHandler,
+    filters,
+)
 from telegram.request import HTTPXRequest
 
 from bot.config import Config, load_config
@@ -65,6 +72,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", app_logic.start))
     application.add_handler(CommandHandler("help", app_logic.start))
     application.add_handler(CommandHandler("search", app_logic.search_cmd))
+    application.add_handler(InlineQueryHandler(app_logic.on_inline_query))
     application.add_handler(CallbackQueryHandler(app_logic.on_callback))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, app_logic.on_text)
@@ -74,7 +82,7 @@ def main() -> None:
         config.everything_base_url,
         config.local_bot_api_url,
     )
-    application.run_polling(allowed_updates=["message", "callback_query"])
+    application.run_polling(allowed_updates=["message", "callback_query", "inline_query"])
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 from bot.everything import FileHit, build_query, format_size, strip_ext_filters
+from bot.session import InlineHitStore
 
 
 def test_passthrough() -> None:
@@ -38,10 +39,30 @@ def test_download_url() -> None:
     assert hit.path_tail == "新建文件夹_27e6"
 
 
+def test_inline_hit_store() -> None:
+    hit = FileHit(
+        name="a.pdf",
+        path="http://example/dir",
+        size=10,
+        date_modified="",
+        item_type="file",
+    )
+    store = InlineHitStore(ttl_seconds=60)
+    token = store.put(hit)
+    assert store.get(token) == hit
+    assert store.get("missing") is None
+    expired = InlineHitStore(ttl_seconds=60)
+    token = expired.put(hit)
+    ts, stored = expired._hits[token]
+    expired._hits[token] = (ts - 61, stored)
+    assert expired.get(token) is None
+
+
 if __name__ == "__main__":
     test_passthrough()
     test_button_overrides_ext()
     test_strip_ext_filters()
     test_format_size()
     test_download_url()
+    test_inline_hit_store()
     print("ok")

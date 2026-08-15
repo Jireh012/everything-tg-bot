@@ -2,9 +2,19 @@ from __future__ import annotations
 
 import logging
 import math
+from html import escape
 from pathlib import Path
 
-from telegram import InputFile, Message, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InlineQueryResultArticle,
+    InlineQueryResultsButton,
+    InputFile,
+    InputTextMessageContent,
+    Message,
+    Update,
+)
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
@@ -13,7 +23,7 @@ from bot.config import Config
 from bot.downloader import DownloadError, Downloader, cleanup
 from bot.everything import EverythingClient, FileHit, SearchError, build_query, format_size
 from bot.formats import ALL_FORMATS, build_result_keyboard
-from bot.session import RateLimiter, SessionStore, UserSession
+from bot.session import InlineHitStore, RateLimiter, SessionStore, UserSession
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +37,8 @@ START_TEXT = """\
 • <code>*.epub 多元社会</code>
 • <code>size:&gt;10mb ext:pdf</code>
 
+任意对话输入 <code>{mention} 关键词</code> 可 Inline 搜索，点结果里的「私聊下载」取文件。
+
 结果下方可点格式按钮筛选（PDF / EPUB / …），点选后会重新向网站查询。
 翻页用「上一页 / 下一页」。会话约 30 分钟有效。
 """
@@ -38,7 +50,9 @@ class BotApp:
         self.client = EverythingClient(config.everything_base_url)
         self.sessions = SessionStore(config.session_ttl_seconds)
         self.search_limiter = RateLimiter(config.search_rate_per_minute)
+        self.inline_limiter = RateLimiter(config.inline_search_rate_per_minute)
         self.download_limiter = RateLimiter(config.download_rate_per_minute)
+        self.inline_hits = InlineHitStore(config.session_ttl_seconds)
         self.downloader = Downloader(
             config.download_dir,
             config.max_file_size_bytes,
@@ -46,8 +60,21 @@ class BotApp:
         )
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if update.message:
-            await update.message.reply_text(START_TEXT, parse_mode=ParseMode.HTML)
+        message = update.message
+        user = update.effective_user
+        if not message:
+            return
+        args = context.args or []
+        if args and args[0].startswith("dl_") and user:
+            token = args[0][3:]
+            hit = self.inline_hits.get(token)
+            if hit is None:
+                await message.reply_text("这条结果已过期，请重新搜索后再点「私聊下载」。")
+                return
+            await self._download_hit(message, user.id, hit)
+            return
+        mention = f"@{context.bot.username}" if context.bot.username else "@bot"
+        await message.reply_text(START_TEXT.format(mention=mention), parse_mode=ParseMode.HTML)
 
     async def search_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.message
@@ -74,6 +101,93 @@ class BotApp:
             return
 
         await self._search(message, user.id, text, ext=None, more=False)
+
+    async def on_inline_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.inline_query
+        user = update.effective_user
+        if not query or not user:
+            return
+        mention = f"@{context.bot.username}" if context.bot.username else "@bot"
+        keyword = (query.query or "").strip()
+        button = InlineQueryResultsButton(text="打开私聊", start_parameter="inline")
+
+        if not keyword:
+            await query.answer(
+                results=[
+                    self._inline_notice(
+                        "hint",
+                        "输入关键词搜索文件",
+                        "例如：ext:pdf 多元社会中",
+                        f"在任意对话输入 {mention} 关键词 即可搜索。",
+                    )
+                ],
+                cache_time=10,
+                is_personal=True,
+                button=button,
+            )
+            return
+
+        if not self.inline_limiter.allow(user.id):
+            await query.answer(
+                results=[
+                    self._inline_notice(
+                        "rate",
+                        "搜索太频繁",
+                        "请稍后再试",
+                        "搜索太频繁，请稍后再试",
+                    )
+                ],
+                cache_time=1,
+                is_personal=True,
+                button=button,
+            )
+            return
+
+        try:
+            offset = int(query.offset or 0)
+        except ValueError:
+            offset = 0
+
+        try:
+            total, results = await self.client.search(
+                keyword, count=self.config.max_results
+            )
+        except SearchError as exc:
+            await query.answer(
+                results=[
+                    self._inline_notice("err", "搜索失败", str(exc), str(exc))
+                ],
+                cache_time=1,
+                is_personal=True,
+                button=button,
+            )
+            return
+
+        page_size = min(self.config.page_size, 50)
+        chunk = results[offset : offset + page_size]
+        next_offset = (
+            str(offset + page_size) if offset + page_size < len(results) else ""
+        )
+        articles: list[InlineQueryResultArticle] = [
+            self._inline_article(hit, context.bot.username, total=total)
+            for hit in chunk
+        ]
+        if not articles:
+            articles.append(
+                self._inline_notice(
+                    "empty",
+                    "没有找到文件",
+                    "换个关键词或格式试试",
+                    f"没有找到：{keyword}",
+                )
+            )
+        await query.answer(
+            results=articles,
+            cache_time=15,
+            is_personal=True,
+            next_offset=next_offset,
+            button=button,
+        )
 
     async def on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
@@ -193,11 +307,14 @@ class BotApp:
         if index < 1 or index > len(session.results):
             await message.reply_text(f"编号无效，请回复 1–{len(session.results)}")
             return
+
+        hit = session.results[index - 1]
+        await self._download_hit(message, user_id, hit)
+
+    async def _download_hit(self, message: Message, user_id: int, hit: FileHit) -> None:
         if not self.download_limiter.allow(user_id):
             await message.reply_text("下载太频繁，请稍后再试")
             return
-
-        hit = session.results[index - 1]
         if hit.size and hit.size > self.config.max_file_size_bytes:
             await message.reply_text(
                 f"文件过大（{format_size(hit.size)}），上限 "
@@ -320,6 +437,54 @@ class BotApp:
         lines.append("")
         lines.append("回复编号下载，例如：1")
         return "\n".join(lines)
+
+    def _inline_article(
+        self, hit: FileHit, bot_username: str | None, *, total: int
+    ) -> InlineQueryResultArticle:
+        token = self.inline_hits.put(hit)
+        ext = hit.ext.upper() if hit.ext else "?"
+        description = f"{format_size(hit.size)} · {ext}"
+        if hit.path_tail:
+            description += f" · {hit.path_tail}"
+        text = (
+            f"<b>{escape(hit.name)}</b>\n"
+            f"{escape(format_size(hit.size))} · {escape(ext)}"
+        )
+        if hit.path_tail:
+            text += f"\n└ {escape(hit.path_tail)}"
+        text += f"\n\n共 {total} 条，点下方按钮到私聊下载。"
+        markup = None
+        if bot_username:
+            markup = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "私聊下载",
+                            url=f"https://t.me/{bot_username}?start=dl_{token}",
+                        )
+                    ]
+                ]
+            )
+        return InlineQueryResultArticle(
+            id=token,
+            title=hit.name,
+            description=description,
+            input_message_content=InputTextMessageContent(
+                text, parse_mode=ParseMode.HTML
+            ),
+            reply_markup=markup,
+        )
+
+    @staticmethod
+    def _inline_notice(
+        result_id: str, title: str, description: str, message: str
+    ) -> InlineQueryResultArticle:
+        return InlineQueryResultArticle(
+            id=result_id,
+            title=title,
+            description=description,
+            input_message_content=InputTextMessageContent(message),
+        )
 
     async def _replace_or_reply(self, message: Message, text: str, *, edit: bool) -> None:
         if edit:

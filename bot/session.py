@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -44,6 +45,36 @@ class SessionStore:
 
     def clear(self, user_id: int) -> None:
         self._sessions.pop(user_id, None)
+
+
+class InlineHitStore:
+    """Inline 结果短链，供 /start dl_<token> 在私聊下载。"""
+
+    def __init__(self, ttl_seconds: int) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._hits: dict[str, tuple[float, FileHit]] = {}
+
+    def put(self, hit: FileHit) -> str:
+        self._purge()
+        token = secrets.token_urlsafe(8)
+        self._hits[token] = (time.time(), hit)
+        return token
+
+    def get(self, token: str) -> FileHit | None:
+        item = self._hits.get(token)
+        if item is None:
+            return None
+        ts, hit = item
+        if time.time() - ts > self.ttl_seconds:
+            self._hits.pop(token, None)
+            return None
+        return hit
+
+    def _purge(self) -> None:
+        now = time.time()
+        expired = [key for key, (ts, _) in self._hits.items() if now - ts > self.ttl_seconds]
+        for key in expired:
+            self._hits.pop(key, None)
 
 
 class RateLimiter:

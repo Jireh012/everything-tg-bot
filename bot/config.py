@@ -33,6 +33,7 @@ class Config:
     max_results: int
     session_ttl_seconds: int
     search_rate_per_minute: int
+    inline_search_rate_per_minute: int
     download_rate_per_minute: int
     max_concurrent_downloads: int
     max_file_size_bytes: int
@@ -65,6 +66,7 @@ def load_config() -> Config:
         max_results=_int("MAX_RESULTS", 50),
         session_ttl_seconds=_int("SESSION_TTL_SECONDS", 1800),
         search_rate_per_minute=_int("SEARCH_RATE_PER_MINUTE", 10),
+        inline_search_rate_per_minute=_int("INLINE_SEARCH_RATE_PER_MINUTE", 30),
         download_rate_per_minute=_int("DOWNLOAD_RATE_PER_MINUTE", 3),
         max_concurrent_downloads=_int("MAX_CONCURRENT_DOWNLOADS", 5),
         max_file_size_bytes=_int("MAX_FILE_SIZE_BYTES", 2 * 1024 * 1024 * 1024),

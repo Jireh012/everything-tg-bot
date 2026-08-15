@@ -8,6 +8,7 @@
 
 - 发送关键词搜索，按修改时间倒序列出结果
 - 回复编号下载，bot 把文件发到当前对话
+- 任意对话输入 `@bot 关键词` Inline 搜索，点「私聊下载」取文件（无需把 bot 加进群）
 - 支持 Everything 原生语法，例如 `ext:pdf 多元社会中`、`*.epub 福音`、`size:>10mb ext:pdf`
 - 结果下方格式按钮：PDF / EPUB / MOBI 等，点选后重新向网站查询
 - 翻页、路径末段区分同名文件
@@ -16,8 +17,9 @@
 ## 准备
 
 1. 向 [@BotFather](https://t.me/BotFather) 创建 bot，拿到 `BOT_TOKEN`
-2. 在 [my.telegram.org](https://my.telegram.org) 申请 `TELEGRAM_API_ID` 和 `TELEGRAM_API_HASH`（Local Bot API 需要）
-3. 安装 Docker（推荐）或本机 Python 3.11+
+2. 在 BotFather 打开 Inline：`/setinline` → 选中 bot → 提示语填 `搜索文件，例如 ext:pdf 福音`
+3. 在 [my.telegram.org](https://my.telegram.org) 申请 `TELEGRAM_API_ID` 和 `TELEGRAM_API_HASH`（Local Bot API 需要）
+4. 安装 Docker（推荐）或本机 Python 3.11+
 
 ## 用 Docker 启动
 
@@ -46,6 +48,17 @@ cp .env.example .env
 # 本机 bot 与容器不共享磁盘时，设 USE_FILE_URI=0
 python -m bot.main
 ```
+
+## Inline 使用
+
+在任意私聊或群里输入：
+
+```text
+@你的Bot用户名 多元社会中
+@你的Bot用户名 ext:pdf 福音
+```
+
+点选一条结果会发出文件信息；再点「私聊下载」，bot 在私聊里把文件发给你。大文件仍走 Local Bot API，不能直接作为 Inline 附件发出。
 
 ## 环境变量
 
