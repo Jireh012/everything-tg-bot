@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 from bot.everything import (
     FileHit,
     build_query,
+    format_hit_html,
     format_hit_meta,
     format_mtime,
     format_size,
@@ -82,6 +83,11 @@ def test_format_hit_meta() -> None:
         item_type="file",
     )
     assert format_hit_meta(hit) == "1.5 MB · PDF · 2024-03-15 12:30"
+    assert format_hit_html(hit, index=1) == (
+        "1. <b>a.pdf</b>\n"
+        "1.5 MB · PDF · 2024-03-15 12:30\n"
+        "└ <code>/dir/sub</code>"
+    )
 
 
 def test_inline_hit_store() -> None:

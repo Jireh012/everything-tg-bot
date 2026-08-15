@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+from html import escape
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse, urlunsplit
 
@@ -122,6 +123,16 @@ def format_hit_meta(hit: FileHit) -> str:
     if mtime:
         parts.append(mtime)
     return " · ".join(parts)
+
+
+def format_hit_html(hit: FileHit, *, index: int | None = None) -> str:
+    title = f"<b>{escape(hit.name)}</b>"
+    if index is not None:
+        title = f"{index}. {title}"
+    lines = [title, escape(format_hit_meta(hit))]
+    if hit.display_path:
+        lines.append(f"└ <code>{escape(hit.display_path)}</code>")
+    return "\n".join(lines)
 
 
 def format_size(size: int) -> str:

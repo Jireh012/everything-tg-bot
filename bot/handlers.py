@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import math
-from html import escape
 from pathlib import Path
 
 from telegram import (
@@ -26,6 +25,7 @@ from bot.everything import (
     FileHit,
     SearchError,
     build_query,
+    format_hit_html,
     format_hit_meta,
     format_size,
 )
@@ -409,11 +409,17 @@ class BotApp:
         )
         if edit:
             try:
-                sent = await message.edit_text(text, reply_markup=markup)
+                sent = await message.edit_text(
+                    text, reply_markup=markup, parse_mode=ParseMode.HTML
+                )
             except TelegramError:
-                sent = await message.reply_text(text, reply_markup=markup)
+                sent = await message.reply_text(
+                    text, reply_markup=markup, parse_mode=ParseMode.HTML
+                )
         else:
-            sent = await message.reply_text(text, reply_markup=markup)
+            sent = await message.reply_text(
+                text, reply_markup=markup, parse_mode=ParseMode.HTML
+            )
         session.result_chat_id = sent.chat_id
         session.result_message_id = sent.message_id
         session.touch()
@@ -434,24 +440,18 @@ class BotApp:
 
         start = page * self.config.page_size
         chunk = session.results[start : start + self.config.page_size]
-        lines = [header, ""]
+        blocks = [header]
         for offset, hit in enumerate(chunk, start=start + 1):
-            line = f"{offset}. {hit.name}  ({format_hit_meta(hit)})"
-            if hit.display_path:
-                line += f"\n    └ {hit.display_path}"
-            lines.append(line)
-        lines.append("")
-        lines.append("回复编号下载，例如：1")
-        return "\n".join(lines)
+            blocks.append(format_hit_html(hit, index=offset))
+        blocks.append("回复编号下载，例如：1")
+        return "\n\n".join(blocks)
 
     def _inline_article(
         self, hit: FileHit, bot_username: str | None, *, total: int
     ) -> InlineQueryResultArticle:
         token = self.inline_hits.put(hit)
         description = format_hit_meta(hit)
-        text = f"<b>{escape(hit.name)}</b>\n{escape(format_hit_meta(hit))}"
-        if hit.display_path:
-            text += f"\n└ {escape(hit.display_path)}"
+        text = format_hit_html(hit)
         text += f"\n\n共 {total} 条，点下方按钮到私聊下载。"
         markup = None
         if bot_username:
