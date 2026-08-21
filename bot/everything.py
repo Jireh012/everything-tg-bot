@@ -50,16 +50,42 @@ class FileHit:
             return unquote(parsed.path)
         return unquote(raw)
 
-    @property
-    def browse_url(self) -> str:
-        """站点上的目录地址，供结果里点击打开。"""
+    def _absolute_url(self, path: str) -> str:
         parsed = urlparse(self.path)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             return ""
-        path = quote(unquote(parsed.path or ""), safe="/")
+        if not path.startswith("/"):
+            path = "/" + path
         return urlunsplit(
-            (parsed.scheme, parsed.netloc, path, parsed.query, parsed.fragment)
+            (
+                parsed.scheme,
+                parsed.netloc,
+                quote(path, safe="/"),
+                parsed.query,
+                parsed.fragment,
+            )
         )
+
+    @property
+    def folder_url(self) -> str:
+        """站点上的目录地址。"""
+        parsed = urlparse(self.path)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return ""
+        return self._absolute_url(unquote(parsed.path or ""))
+
+    @property
+    def browse_url(self) -> str:
+        """站点上该文件的浏览地址（不含 /d/ 直链前缀）。"""
+        parsed = urlparse(self.path)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return ""
+        dir_path = unquote(parsed.path or "").rstrip("/")
+        name = (self.name or "").strip()
+        if not name:
+            return self._absolute_url(dir_path)
+        file_path = f"{dir_path}/{name}" if dir_path else f"/{name}"
+        return self._absolute_url(file_path)
 
     @property
     def download_url(self) -> str:
@@ -156,9 +182,9 @@ def format_hit_html(
     lines = [title, meta]
     if hit.display_path:
         label = escape(hit.display_path)
-        url = hit.browse_url
-        if url:
-            lines.append(f'└ <a href="{escape(url)}">{label}</a>')
+        folder = hit.folder_url
+        if folder:
+            lines.append(f'└ <a href="{escape(folder)}">{label}</a>')
         else:
             lines.append(f"└ <code>{label}</code>")
     return "\n".join(lines)

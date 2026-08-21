@@ -57,7 +57,24 @@ def test_download_url() -> None:
     assert hit.display_path == "/baidupan/txt/09_其他综合资源/新建文件夹_27e6"
     assert (
         hit.browse_url
+        == "http://www.https.ng/baidupan/txt/09_%E5%85%B6%E4%BB%96%E7%BB%BC%E5%90%88%E8%B5%84%E6%BA%90/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9_27e6/%E5%A4%9A%E5%85%83%E7%A4%BE%E4%BC%9A%E4%B8%AD%E7%9A%84%E5%9F%BA%E7%9D%A3%E6%95%99.pdf"
+    )
+    assert (
+        hit.folder_url
         == "http://www.https.ng/baidupan/txt/09_%E5%85%B6%E4%BB%96%E7%BB%BC%E5%90%88%E8%B5%84%E6%BA%90/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9_27e6"
+    )
+    file_hit = FileHit(
+        name="基督教要义（套装全3册） - 约翰·加尔文.epub",
+        path="http://https.ng/电子书/中文/2024-2026/epub电子书",
+        size=1,
+        date_modified="",
+        item_type="file",
+    )
+    assert file_hit.browse_url == (
+        "http://https.ng"
+        "/%E7%94%B5%E5%AD%90%E4%B9%A6/%E4%B8%AD%E6%96%87/2024-2026/epub%E7%94%B5%E5%AD%90%E4%B9%A6"
+        "/%E5%9F%BA%E7%9D%A3%E6%95%99%E8%A6%81%E4%B9%89%EF%BC%88%E5%A5%97%E8%A3%85%E5%85%A83%E5%86%8C%EF%BC%89"
+        "%20-%20%E7%BA%A6%E7%BF%B0%C2%B7%E5%8A%A0%E5%B0%94%E6%96%87.epub"
     )
 
 
@@ -90,7 +107,7 @@ def test_format_hit_meta() -> None:
     assert format_hit_html(hit, index=1) == (
         "1. <b>a.pdf</b>\n"
         "1.5 MB · PDF · 2024-03-15 12:30 · "
-        '<a href="http://example/dir/sub">[打开网址]</a>\n'
+        '<a href="http://example/dir/sub/a.pdf">[打开网址]</a>\n'
         '└ <a href="http://example/dir/sub">/dir/sub</a>'
     )
     assert format_hit_html(
@@ -99,7 +116,7 @@ def test_format_hit_meta() -> None:
         "1. <b>a.pdf</b>\n"
         "1.5 MB · PDF · 2024-03-15 12:30 · "
         '<a href="https://t.me/bot?start=n_1">[发给我]</a> · '
-        '<a href="http://example/dir/sub">[打开网址]</a>\n'
+        '<a href="http://example/dir/sub/a.pdf">[打开网址]</a>\n'
         '└ <a href="http://example/dir/sub">/dir/sub</a>'
     )
     local = FileHit(
