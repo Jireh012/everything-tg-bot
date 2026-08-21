@@ -51,6 +51,17 @@ class FileHit:
         return unquote(raw)
 
     @property
+    def browse_url(self) -> str:
+        """站点上的目录地址，供结果里点击打开。"""
+        parsed = urlparse(self.path)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return ""
+        path = quote(unquote(parsed.path or ""), safe="/")
+        return urlunsplit(
+            (parsed.scheme, parsed.netloc, path, parsed.query, parsed.fragment)
+        )
+
+    @property
     def download_url(self) -> str:
         parsed = urlparse(self.path)
         if parsed.scheme in {"http", "https"} and parsed.netloc:
@@ -125,13 +136,31 @@ def format_hit_meta(hit: FileHit) -> str:
     return " · ".join(parts)
 
 
-def format_hit_html(hit: FileHit, *, index: int | None = None) -> str:
+def format_hit_html(
+    hit: FileHit,
+    *,
+    index: int | None = None,
+    send_url: str | None = None,
+) -> str:
     title = f"<b>{escape(hit.name)}</b>"
     if index is not None:
         title = f"{index}. {title}"
-    lines = [title, escape(format_hit_meta(hit))]
+    meta = escape(format_hit_meta(hit))
+    actions: list[str] = []
+    if send_url:
+        actions.append(f'<a href="{escape(send_url)}">[发给我]</a>')
+    if hit.browse_url:
+        actions.append(f'<a href="{escape(hit.browse_url)}">[打开网址]</a>')
+    if actions:
+        meta = f"{meta} · {' · '.join(actions)}"
+    lines = [title, meta]
     if hit.display_path:
-        lines.append(f"└ <code>{escape(hit.display_path)}</code>")
+        label = escape(hit.display_path)
+        url = hit.browse_url
+        if url:
+            lines.append(f'└ <a href="{escape(url)}">{label}</a>')
+        else:
+            lines.append(f"└ <code>{label}</code>")
     return "\n".join(lines)
 
 

@@ -35,7 +35,7 @@ from bot.session import InlineHitStore, RateLimiter, SessionStore, UserSession
 logger = logging.getLogger(__name__)
 
 START_TEXT = """\
-用关键词搜索文件，回复编号即可下载。
+用关键词搜索文件，点「发给我」或回复编号即可下载。
 
 直接发送：
 • <code>多元社会中</code>
@@ -72,14 +72,23 @@ class BotApp:
         if not message:
             return
         args = context.args or []
-        if args and args[0].startswith("dl_") and user:
-            token = args[0][3:]
-            hit = self.inline_hits.get(token)
-            if hit is None:
-                await message.reply_text("这条结果已过期，请重新搜索后再点「私聊下载」。")
+        if args and user:
+            payload = args[0]
+            if payload.startswith("dl_"):
+                hit = self.inline_hits.get(payload[3:])
+                if hit is None:
+                    await message.reply_text("这条结果已过期，请重新搜索后再点「发给我」。")
+                    return
+                await self._download_hit(message, user.id, hit)
                 return
-            await self._download_hit(message, user.id, hit)
-            return
+            if payload.startswith("n_"):
+                try:
+                    index = int(payload[2:])
+                except ValueError:
+                    await message.reply_text("编号无效，请重新搜索后再点「发给我」。")
+                    return
+                await self._download_by_index(message, user.id, index)
+                return
         mention = f"@{context.bot.username}" if context.bot.username else "@bot"
         await message.reply_text(START_TEXT.format(mention=mention), parse_mode=ParseMode.HTML)
 
@@ -400,7 +409,10 @@ class BotApp:
     async def _render_session(
         self, message: Message, session: UserSession, *, edit: bool
     ) -> None:
-        text = self._format_list(session)
+        bot = message.get_bot()
+        text = self._format_list(
+            session, bot_username=bot.username if bot else None
+        )
         markup = build_result_keyboard(
             page=session.page,
             page_count=self._page_count(len(session.results)),
@@ -410,21 +422,32 @@ class BotApp:
         if edit:
             try:
                 sent = await message.edit_text(
-                    text, reply_markup=markup, parse_mode=ParseMode.HTML
+                    text,
+                    reply_markup=markup,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
                 )
             except TelegramError:
                 sent = await message.reply_text(
-                    text, reply_markup=markup, parse_mode=ParseMode.HTML
+                    text,
+                    reply_markup=markup,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
                 )
         else:
             sent = await message.reply_text(
-                text, reply_markup=markup, parse_mode=ParseMode.HTML
+                text,
+                reply_markup=markup,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
             )
         session.result_chat_id = sent.chat_id
         session.result_message_id = sent.message_id
         session.touch()
 
-    def _format_list(self, session: UserSession) -> str:
+    def _format_list(
+        self, session: UserSession, *, bot_username: str | None = None
+    ) -> str:
         shown = len(session.results)
         page_count = self._page_count(shown)
         page = min(session.page, page_count - 1)
@@ -442,8 +465,12 @@ class BotApp:
         chunk = session.results[start : start + self.config.page_size]
         blocks = [header]
         for offset, hit in enumerate(chunk, start=start + 1):
-            blocks.append(format_hit_html(hit, index=offset))
-        blocks.append("回复编号下载，例如：1")
+            send_url = (
+                f"https://t.me/{bot_username}?start=n_{offset}"
+                if bot_username
+                else None
+            )
+            blocks.append(format_hit_html(hit, index=offset, send_url=send_url))
         return "\n\n".join(blocks)
 
     def _inline_article(
@@ -452,25 +479,26 @@ class BotApp:
         token = self.inline_hits.put(hit)
         description = format_hit_meta(hit)
         text = format_hit_html(hit)
-        text += f"\n\n共 {total} 条，点下方按钮到私聊下载。"
+        text += f"\n\n共 {total} 条，可打开站点或点「私聊下载」取文件。"
         markup = None
+        actions: list[InlineKeyboardButton] = []
+        if hit.browse_url:
+            actions.append(InlineKeyboardButton("打开站点", url=hit.browse_url))
         if bot_username:
-            markup = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "私聊下载",
-                            url=f"https://t.me/{bot_username}?start=dl_{token}",
-                        )
-                    ]
-                ]
+            actions.append(
+                InlineKeyboardButton(
+                    "私聊下载",
+                    url=f"https://t.me/{bot_username}?start=dl_{token}",
+                )
             )
+        if actions:
+            markup = InlineKeyboardMarkup([actions])
         return InlineQueryResultArticle(
             id=token,
             title=hit.name,
             description=description,
             input_message_content=InputTextMessageContent(
-                text, parse_mode=ParseMode.HTML
+                text, parse_mode=ParseMode.HTML, disable_web_page_preview=True
             ),
             reply_markup=markup,
         )

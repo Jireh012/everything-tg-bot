@@ -55,6 +55,10 @@ def test_download_url() -> None:
     assert hit.ext == "pdf"
     assert hit.path_tail == "新建文件夹_27e6"
     assert hit.display_path == "/baidupan/txt/09_其他综合资源/新建文件夹_27e6"
+    assert (
+        hit.browse_url
+        == "http://www.https.ng/baidupan/txt/09_%E5%85%B6%E4%BB%96%E7%BB%BC%E5%90%88%E8%B5%84%E6%BA%90/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9_27e6"
+    )
 
 
 def test_to_direct_download_url() -> None:
@@ -85,8 +89,31 @@ def test_format_hit_meta() -> None:
     assert format_hit_meta(hit) == "1.5 MB · PDF · 2024-03-15 12:30"
     assert format_hit_html(hit, index=1) == (
         "1. <b>a.pdf</b>\n"
-        "1.5 MB · PDF · 2024-03-15 12:30\n"
-        "└ <code>/dir/sub</code>"
+        "1.5 MB · PDF · 2024-03-15 12:30 · "
+        '<a href="http://example/dir/sub">[打开网址]</a>\n'
+        '└ <a href="http://example/dir/sub">/dir/sub</a>'
+    )
+    assert format_hit_html(
+        hit, index=1, send_url="https://t.me/bot?start=n_1"
+    ) == (
+        "1. <b>a.pdf</b>\n"
+        "1.5 MB · PDF · 2024-03-15 12:30 · "
+        '<a href="https://t.me/bot?start=n_1">[发给我]</a> · '
+        '<a href="http://example/dir/sub">[打开网址]</a>\n'
+        '└ <a href="http://example/dir/sub">/dir/sub</a>'
+    )
+    local = FileHit(
+        name="a.pdf",
+        path="/local/dir",
+        size=10,
+        date_modified="",
+        item_type="file",
+    )
+    assert local.browse_url == ""
+    assert format_hit_html(local) == (
+        "<b>a.pdf</b>\n"
+        "10 B · PDF\n"
+        "└ <code>/local/dir</code>"
     )
 
 
