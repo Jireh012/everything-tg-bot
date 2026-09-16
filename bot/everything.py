@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from html import escape
 from typing import Any
-from urllib.parse import quote, unquote, urljoin, urlparse, urlunsplit
+from urllib.parse import quote, unquote, urlencode, urljoin, urlparse, urlunsplit
 
 import httpx
 
@@ -89,12 +89,9 @@ class FileHit:
 
     @property
     def download_url(self) -> str:
-        parsed = urlparse(self.path)
-        if parsed.scheme in {"http", "https"} and parsed.netloc:
-            dir_path = unquote(parsed.path or "").rstrip("/")
-            file_path = f"{dir_path}/{self.name}" if dir_path else f"/{self.name}"
-            joined = urlunsplit((parsed.scheme, parsed.netloc, file_path, "", ""))
-            return to_direct_download_url(joined)
+        browse = self.browse_url
+        if browse:
+            return to_direct_download_url(browse)
         return urljoin(self.path.rstrip("/") + "/", quote(self.name))
 
     @property
@@ -109,10 +106,85 @@ def to_direct_download_url(url: str) -> str:
         return url
     path = unquote(parsed.path or "")
     if path.startswith("/d/") or path == "/d":
-        return url
+        encoded = quote(path, safe="/")
+        return urlunsplit(
+            (parsed.scheme, parsed.netloc, encoded, parsed.query, parsed.fragment)
+        )
     if not path.startswith("/"):
         path = "/" + path
-    return urlunsplit((parsed.scheme, parsed.netloc, "/d" + path, parsed.query, parsed.fragment))
+    encoded = quote("/d" + path, safe="/")
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, encoded, parsed.query, parsed.fragment)
+    )
+
+
+def alist_virtual_path(url: str) -> str:
+    """从浏览地址或 /d/、/p/ 直链还原 AList 文件路径。"""
+    path = unquote(urlparse(url).path or "")
+    for prefix in ("/d/", "/p/"):
+        if path.startswith(prefix):
+            return "/" + path[len(prefix) :].lstrip("/")
+    if path.startswith("/d") and path[2:3] in {"", "/"}:
+        return "/"
+    if not path.startswith("/"):
+        return "/" + path
+    return path or "/"
+
+
+def build_signed_download_url(origin: str, file_path: str, sign: str) -> str:
+    if not file_path.startswith("/"):
+        file_path = "/" + file_path
+    url = origin.rstrip("/") + quote("/d" + file_path, safe="/")
+    if sign:
+        url += "?" + urlencode({"sign": sign})
+    return url
+
+
+def signed_download_url_from_fs_get(
+    origin: str, file_path: str, payload: dict[str, Any]
+) -> str:
+    if payload.get("code") != 200:
+        return ""
+    data = payload.get("data") or {}
+    sign = str(data.get("sign") or "")
+    if sign:
+        return build_signed_download_url(origin, file_path, sign)
+    raw = data.get("raw_url") or ""
+    if isinstance(raw, str) and raw.startswith("http"):
+        return raw
+    return ""
+
+
+async def resolve_download_url(
+    url: str,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> str:
+    """向 AList /api/fs/get 换带 sign 的直链；失败则退回原地址。"""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return url
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    file_path = alist_virtual_path(url)
+    if not file_path or file_path == "/":
+        return url
+
+    async def _fetch(http: httpx.AsyncClient) -> str:
+        resp = await http.post(
+            origin + "/api/fs/get",
+            json={"path": file_path, "password": ""},
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        return signed_download_url_from_fs_get(origin, file_path, payload) or url
+
+    try:
+        if client is not None:
+            return await _fetch(client)
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as http:
+            return await _fetch(http)
+    except (httpx.HTTPError, ValueError, TypeError):
+        return url
 
 
 def strip_ext_filters(keyword: str) -> str:

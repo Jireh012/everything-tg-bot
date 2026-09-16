@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import uuid
@@ -9,7 +10,7 @@ from pathlib import Path
 
 import httpx
 
-from bot.everything import format_size, to_direct_download_url
+from bot.everything import format_size, resolve_download_url
 
 ProgressCallback = Callable[[int, int | None], Awaitable[None]]
 
@@ -60,7 +61,11 @@ class Downloader:
         async with client.stream("GET", url) as resp:
             if resp.status_code >= 400:
                 raise DownloadError(f"下载失败（HTTP {resp.status_code}）")
-            total = _content_length(resp) or (expected_size or None)
+            ctype = (resp.headers.get("content-type") or "").lower()
+            clen = _content_length(resp)
+            total = clen or (expected_size or None)
+            if _content_type_is_error_page(ctype, expected_size, clen):
+                raise DownloadError("站点未返回文件内容，请稍后重试")
             if total and total > self.max_file_size:
                 raise DownloadError(
                     f"文件过大（{format_size(total)}），上限 {format_size(self.max_file_size)}"
@@ -101,20 +106,16 @@ class Downloader:
             async with httpx.AsyncClient(
                 timeout=timeout, follow_redirects=True, headers=headers
             ) as client:
+                url = await resolve_download_url(url, client=client)
                 written = await self._stream_to_file(
                     client, url, dest, expected_size, on_progress
                 )
-                if _file_looks_like_html(dest):
-                    alt = to_direct_download_url(url)
-                    if alt != url:
-                        _unlink_quiet(dest)
-                        written = await self._stream_to_file(
-                            client, alt, dest, expected_size, on_progress
-                        )
                 if written == 0:
                     raise DownloadError("下载内容为空")
-                if _file_looks_like_html(dest):
-                    raise DownloadError("下载到的是网页而不是文件，请稍后重试")
+                if _file_looks_like_error(dest) or _incomplete_download(
+                    written, expected_size
+                ):
+                    raise DownloadError("站点未返回文件内容，请稍后重试")
             if on_progress:
                 await on_progress(written, written)
             return dest
@@ -155,14 +156,49 @@ def _looks_like_html(content_type: str | None, sample: bytes) -> bool:
     return head.startswith(b"<!doctype html") or head.startswith(b"<html")
 
 
-def _file_looks_like_html(path: Path) -> bool:
+def _looks_like_json_error(sample: bytes) -> bool:
+    head = sample.lstrip()
+    if not head.startswith(b"{"):
+        return False
+    try:
+        data = json.loads(head.decode("utf-8", "replace"))
+    except ValueError:
+        return False
+    return isinstance(data, dict) and data.get("code") not in (None, 200)
+
+
+def _file_looks_like_error(path: Path) -> bool:
     if not path.exists():
         return False
     try:
-        sample = path.read_bytes()[:256]
+        sample = path.read_bytes()[:512]
     except OSError:
         return False
-    return _looks_like_html(None, sample)
+    return _looks_like_html(None, sample) or _looks_like_json_error(sample)
+
+
+def _content_type_is_error_page(
+    ctype: str, expected_size: int, content_length: int | None
+) -> bool:
+    if "text/html" in ctype:
+        return expected_size >= 1024 or (
+            content_length is not None and content_length < 4096
+        )
+    if "json" not in ctype:
+        return False
+    if content_length is not None:
+        return expected_size >= 1024 and content_length < min(1024, expected_size // 2)
+    return expected_size >= 1024
+
+
+def _incomplete_download(written: int, expected_size: int) -> bool:
+    if expected_size < 1024 or written <= 0:
+        return False
+    if written >= expected_size:
+        return False
+    if written < 1024:
+        return True
+    return written < min(expected_size // 2, 4096)
 
 
 def _content_length(resp: httpx.Response) -> int | None:

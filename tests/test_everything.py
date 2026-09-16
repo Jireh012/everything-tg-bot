@@ -2,17 +2,26 @@ from datetime import datetime, timezone, timedelta
 
 from bot.everything import (
     FileHit,
+    alist_virtual_path,
     build_query,
+    build_signed_download_url,
     format_hit_html,
     format_hit_meta,
     format_mtime,
     format_size,
+    signed_download_url_from_fs_get,
     strip_ext_filters,
     to_direct_download_url,
 )
 
 _TZ_CN = timezone(timedelta(hours=8))
-from bot.downloader import cleanup, safe_filename
+from bot.downloader import (
+    _content_type_is_error_page,
+    _incomplete_download,
+    _looks_like_json_error,
+    cleanup,
+    safe_filename,
+)
 from bot.session import InlineHitStore
 
 
@@ -50,7 +59,7 @@ def test_download_url() -> None:
     )
     assert (
         hit.download_url
-        == "http://www.https.ng/d/baidupan/txt/09_其他综合资源/新建文件夹_27e6/多元社会中的基督教.pdf"
+        == "http://www.https.ng/d/baidupan/txt/09_%E5%85%B6%E4%BB%96%E7%BB%BC%E5%90%88%E8%B5%84%E6%BA%90/%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9_27e6/%E5%A4%9A%E5%85%83%E7%A4%BE%E4%BC%9A%E4%B8%AD%E7%9A%84%E5%9F%BA%E7%9D%A3%E6%95%99.pdf"
     )
     assert hit.ext == "pdf"
     assert hit.path_tail == "新建文件夹_27e6"
@@ -83,6 +92,35 @@ def test_to_direct_download_url() -> None:
     assert to_direct_download_url(src) == "http://www.https.ng/d/baidupan/txt/a.pdf"
     already = "http://www.https.ng/d/baidupan/txt/a.pdf"
     assert to_direct_download_url(already) == already
+
+
+def test_alist_signed_download_url() -> None:
+    src = (
+        "http://www.https.ng/d/c/PDF/99-70/3/"
+        "%E6%96%B0%E5%BB%BA%E6%96%87%E4%BB%B6%E5%A4%B9%20%283%29/"
+        "%E5%9F%BA%E7%9D%A3%E4%B8%8E%E6%96%87%E5%8C%96.pdf"
+    )
+    assert (
+        alist_virtual_path(src)
+        == "/c/PDF/99-70/3/新建文件夹 (3)/基督与文化.pdf"
+    )
+    sign = "OT0r9zLHJRNbOJDk7CQmAEX1bFIxkqJ-VMxOzHKyYXI=:0"
+    got = signed_download_url_from_fs_get(
+        "http://www.https.ng",
+        "/c/PDF/99-70/3/新建文件夹 (3)/基督与文化.pdf",
+        {"code": 200, "data": {"sign": sign}},
+    )
+    assert got == build_signed_download_url(
+        "http://www.https.ng",
+        "/c/PDF/99-70/3/新建文件夹 (3)/基督与文化.pdf",
+        sign,
+    )
+    assert "sign=" in got
+    assert signed_download_url_from_fs_get(
+        "http://www.https.ng",
+        "/a.pdf",
+        {"code": 401, "message": "expire missing", "data": None},
+    ) == ""
 
 
 def test_format_mtime() -> None:
@@ -157,6 +195,17 @@ def test_safe_filename_keeps_original() -> None:
     assert safe_filename("多元社会中的基督教.pdf") == "多元社会中的基督教.pdf"
 
 
+def test_rejects_alist_error_payload() -> None:
+    sample = b'{"code":401,"message":"expire missing","data":null}'
+    assert len(sample) == 51
+    assert _looks_like_json_error(sample)
+    assert not _looks_like_json_error(b"%PDF-1.5\n")
+    assert _content_type_is_error_page("application/json; charset=utf-8", 7071121, 51)
+    assert not _content_type_is_error_page("application/pdf", 7071121, 7071121)
+    assert _incomplete_download(51, 7071121)
+    assert not _incomplete_download(7071121, 7071121)
+
+
 def test_cleanup_removes_uuid_dir() -> None:
     import tempfile
     from pathlib import Path
@@ -179,9 +228,11 @@ if __name__ == "__main__":
     test_format_size()
     test_download_url()
     test_to_direct_download_url()
+    test_alist_signed_download_url()
     test_format_mtime()
     test_format_hit_meta()
     test_inline_hit_store()
     test_safe_filename_keeps_original()
+    test_rejects_alist_error_payload()
     test_cleanup_removes_uuid_dir()
     print("ok")
